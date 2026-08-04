@@ -1,0 +1,20 @@
+[project]
+name = "mcp-search-engine"
+description = "An MCP server that searches & scrapes multiple sources, then renders an interactive FastMCP App UI to pick a source to delve into."
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "fastmcp==4.0.0b1",
+    "httpx>=0.28",
+    "beautifulsoup4>=4.12",
+]
+
+[project.scripts]
+mcp-search-engine = "search_engine.server:main"
+
+[tool.uv]
+constraint-dependencies = ["fastmcp-slim==4.0.0b1"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.backend"

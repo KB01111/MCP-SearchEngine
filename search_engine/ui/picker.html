@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="light dark" />
+<title>Source Picker</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --panel-2: #1e222b;
+    --border: #2a2f3a;
+    --text: #e7ea f0;
+    --text: #e7eaf0;
+    --muted: #9aa3b2;
+    --accent: #4f8cff;
+    --accent-2: #2f6bff;
+    --good: #37c08b;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+  }
+  #app { padding: 16px; max-width: 920px; margin: 0 auto; }
+
+  .head { margin-bottom: 14px; }
+  .head h1 { font-size: 18px; margin: 0 0 4px; letter-spacing: .2px; }
+  .head p { margin: 0; color: var(--muted); font-size: 13px; }
+  .head .q { color: var(--text); font-weight: 600; }
+
+  .filters { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 16px; }
+  .chip {
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--muted);
+    font-size: 12px;
+    padding: 5px 11px;
+    border-radius: 999px;
+    cursor: pointer;
+    user-select: none;
+    transition: all .15s ease;
+  }
+  .chip:hover { border-color: var(--accent); color: var(--text); }
+  .chip.active {
+    background: rgba(79,140,255,.16);
+    border-color: var(--accent);
+    color: var(--text);
+  }
+
+  .grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
+  @media (min-width: 640px) { .grid { grid-template-columns: 1fr 1fr; } }
+
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 13px 14px;
+    cursor: pointer;
+    transition: all .15s ease;
+    position: relative;
+    display: flex; flex-direction: column; gap: 7px;
+  }
+  .card:hover { border-color: var(--accent); transform: translateY(-1px); background: var(--panel-2); }
+  .card.selected { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(79,140,255,.35) inset; }
+  .card.picked { border-color: var(--good); box-shadow: 0 0 0 2px rgba(55,192,139,.35) inset; }
+
+  .card .top { display: flex; align-items: center; gap: 8px; }
+  .badge {
+    font-size: 10px; text-transform: uppercase; letter-spacing: .6px;
+    padding: 2px 7px; border-radius: 999px; font-weight: 700;
+    white-space: nowrap;
+  }
+  .b-web { background: #233; color: #7dd3fc; }
+  .b-duckduckgo { background: #3a2430; color: #fda4af; }
+  .b-wikipedia { background: #2b2b23; color: #fde68a; }
+  .b-arxiv { background: #33231f; color: #fca5a5; }
+  .b-hackernews { background: #33261a; color: #fdba74; }
+
+  .card .title { font-size: 14px; font-weight: 600; line-height: 1.35; }
+  .card .snippet { font-size: 12.5px; color: var(--muted); line-height: 1.45;
+                   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .card .url { font-size: 11px; color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .mark {
+    position: absolute; top: 10px; right: 10px;
+    width: 20px; height: 20px; border-radius: 50%;
+    display: none; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 700; color: #06110b; background: var(--good);
+  }
+  .card.picked .mark { display: flex; }
+  .card.selected .mark { display: flex; background: var(--accent); color: #fff; }
+
+  .footer {
+    position: sticky; bottom: 0; margin-top: 16px; padding: 12px 0 4px;
+    background: linear-gradient(to top, var(--bg) 65%, transparent);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .btn {
+    border: none; border-radius: 9px; padding: 10px 18px;
+    font-size: 13.5px; font-weight: 600; cursor: pointer; transition: all .15s ease;
+  }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover:not(:disabled) { background: var(--accent-2); }
+  .btn-primary:disabled { opacity: .45; cursor: not-allowed; }
+  .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+  .btn-ghost:hover { color: var(--text); border-color: var(--muted); }
+  .count { font-size: 12.5px; color: var(--muted); }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 10px; line-height: 1.5; }
+
+  .state { padding: 40px 10px; text-align: center; color: var(--muted); font-size: 13.5px; }
+  .spinner { width: 26px; height: 26px; margin: 0 auto 12px; border-radius: 50%;
+             border: 3px solid var(--border); border-top-color: var(--accent);
+             animation: spin 0.9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .err { color: #fda4af; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="state"><div class="spinner"></div>Waiting for search results from the host…</div>
+</div>
+
+<script type="module">
+  import { App } from "https://unpkg.com/@modelcontextprotocol/ext-apps@0.4.0/app-with-deps";
+
+  const app = new App({ name: "MCP SearchEngine Source Picker", version: "1.0.0" });
+  const root = document.getElementById("app");
+
+  let payload = { query: "", results: [] };
+  let activeSource = "all";
+  const picked = new Set();
+
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+  ));
+
+  function parseToolResult(result) {
+    // result: { content: [{type:'text', text:'<json>'}], structuredContent? }
+    if (result && result.structuredContent) return result.structuredContent;
+    const text = result?.content?.find(c => c.type === "text")?.text;
+    if (text) {
+      try {
+        const parsed = JSON.parse(text);
+        // Some hosts nest the structured payload under structuredContent.
+        if (parsed && parsed.structuredContent) return parsed.structuredContent;
+        return parsed;
+      } catch { /* fallthrough */ }
+    }
+    return { query: "", results: [] };
+  }
+
+  function sources() {
+    const order = ["web", "duckduckgo", "wikipedia", "arxiv", "hackernews"];
+    const present = [...new Set(payload.results.map(r => r.source))];
+    return ["all", ...order.filter(s => present.includes(s)),
+            ...present.filter(s => !order.includes(s))];
+  }
+
+  function visible() {
+    return payload.results.filter(r =>
+      (activeSource === "all" || r.source === activeSource) && !r.extra?.error && r.url);
+  }
+
+  function render() {
+    const results = payload.results || [];
+    if (!results.length) {
+      root.innerHTML = `<div class="state">No results to display.</div>`;
+      return;
+    }
+    const errs = results.filter(r => r.extra?.error);
+    const vis = visible();
+
+    root.innerHTML = `
+      <div class="head">
+        <h1>Pick a source to delve into</h1>
+        <p>Query: <span class="q">${esc(payload.query)}</span> · ${vis.length} result${vis.length === 1 ? "" : "s"}</p>
+      </div>
+      <div class="filters">
+        ${sources().map(s => `
+          <div class="chip ${s === activeSource ? "active" : ""}" data-src="${esc(s)}">
+            ${esc(s === "all" ? "All sources" : s)}
+          </div>`).join("")}
+      </div>
+      ${errs.length ? `<div class="hint err">${errs.map(e => "⚠ " + esc(e.source) + ": " + esc(e.snippet)).join("<br>")}</div>` : ""}
+      <div class="grid">
+        ${vis.map((r, i) => `
+          <div class="card ${picked.has(r.id) ? "picked" : ""}" data-id="${esc(r.id)}">
+            <div class="mark">✓</div>
+            <div class="top"><span class="badge b-${esc(r.source)}">${esc(r.source)}</span></div>
+            <div class="title">${esc(r.title)}</div>
+            ${r.snippet ? `<div class="snippet">${esc(r.snippet)}</div>` : ""}
+            <div class="url">${esc(r.url)}</div>
+          </div>`).join("")}
+      </div>
+      <div class="footer">
+        <button id="delve" class="btn btn-primary" ${picked.size ? "" : "disabled"}>
+          Delve into ${picked.size || ""} selected
+        </button>
+        <button id="clear" class="btn btn-ghost">Clear</button>
+        <span class="count">${picked.size} selected</span>
+      </div>
+      <div class="hint">
+        Click cards to select, then “Delve into selected”, or double-click a card to delve into just that one.
+        The picked pages will be scraped and returned to the conversation.
+      </div>
+    `;
+
+    root.querySelectorAll(".chip").forEach(chip => {
+      chip.addEventListener("click", () => {
+        activeSource = chip.dataset.src;
+        render();
+      });
+    });
+
+    root.querySelectorAll(".card").forEach(card => {
+      const id = card.dataset.id;
+      const toggle = () => {
+        picked.has(id) ? picked.delete(id) : picked.add(id);
+        card.classList.toggle("picked");
+        root.querySelector("#delve").disabled = picked.size === 0;
+        root.querySelector("#delve").textContent = `Delve into ${picked.size || ""} selected`;
+        root.querySelector(".count").textContent = `${picked.size} selected`;
+      };
+      card.addEventListener("click", toggle);
+      card.addEventListener("dblclick", () => delve([id]));
+    });
+
+    root.querySelector("#delve").addEventListener("click", () => delve([...picked]));
+    root.querySelector("#clear").addEventListener("click", () => { picked.clear(); render(); });
+  }
+
+  async function delve(ids) {
+    const items = payload.results.filter(r => ids.includes(r.id));
+    if (!items.length) return;
+    root.innerHTML = `<div class="state"><div class="spinner"></div>Scraping ${items.length} source${items.length === 1 ? "" : "s"}…</div>`;
+    try {
+      const res = await app.callServerTool({
+        name: "delve_sources",
+        arguments: { picks: items.map(r => ({ id: r.id, url: r.url, title: r.title, source: r.source })) },
+      });
+      const data = parseToolResult(res);
+      const pages = data.pages || [];
+      root.innerHTML = `
+        <div class="head"><h1>Delved into ${pages.length} source${pages.length === 1 ? "" : "s"}</h1>
+        <p>The full scraped content has been returned to the conversation.</p></div>
+        <div class="grid">
+          ${pages.map(p => `
+            <div class="card picked">
+              <div class="mark">✓</div>
+              <div class="top"><span class="badge b-${esc(p.source)}">${esc(p.source)}</span></div>
+              <div class="title">${esc(p.title)}</div>
+              <div class="snippet">${esc((p.content || "").slice(0, 260))}${p.truncated ? "…" : ""}</div>
+              <div class="url">${esc(p.url)}</div>
+            </div>`).join("")}
+        </div>`;
+    } catch (e) {
+      root.innerHTML = `<div class="state err">Failed to delve: ${esc(e?.message || e)}</div>`;
+    }
+  }
+
+  // Host pushes the search_all results here.
+  app.ontoolresult = (result) => {
+    const data = parseToolResult(result);
+    if (data && Array.isArray(data.results) && data.mode === "pick") {
+      payload = data;
+      picked.clear();
+      render();
+    } else if (data && data.mode === "delve") {
+      // delve results rendered via delve() promise path; ignore
+    } else if (data && Array.isArray(data.results)) {
+      payload = data;
+      picked.clear();
+      render();
+    }
+  };
+
+  await app.connect();
+</script>
+</body>
+</html>
