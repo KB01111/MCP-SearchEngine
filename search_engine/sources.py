@@ -11,12 +11,16 @@ Available sources
 - ``wikipedia`` Wikipedia OpenSearch + summary API
 - ``arxiv``     arXiv Atom API (papers)
 - ``hackernews`` Algolia Hacker News search API
+- ``reddit``    Reddit public JSON search
+- ``x``         X/Twitter via syndication API + nitter fallback
+- ``perplexity`` Perplexity Chat API (needs PERPLEXITY_API_KEY; opt-in, not in defaults)
 """
 
 from __future__ import annotations
 
 import asyncio
 import html
+import os
 import re
 import urllib.parse
 import xml.etree.ElementTree as ET
@@ -26,7 +30,12 @@ from typing import Any
 import httpx
 from bs4 import BeautifulSoup
 
-DEFAULT_SOURCES = ["web", "duckduckgo", "wikipedia", "arxiv", "hackernews"]
+try:
+    from .net import ephemeral_client, fetch_text
+except ImportError:  # pragma: no cover - standalone (Horizon/fastmcp CLI) import
+    from search_engine.net import ephemeral_client, fetch_text
+
+DEFAULT_SOURCES = ["web", "duckduckgo", "wikipedia", "arxiv", "hackernews", "reddit", "x"]
 
 # A descriptive UA is required by Wikipedia/arXiv policy; a fake browser UA
 # gets 403s from their APIs.
@@ -239,12 +248,155 @@ async def _search_hackernews(
     return results
 
 
+_NITTER_INSTANCES = ["https://nitter.net", "https://nitter.privacydev.net"]
+
+
+async def _search_reddit(
+    client: httpx.AsyncClient, query: str, max_results: int
+) -> list[SearchResult]:
+    """Reddit public JSON search (no API key)."""
+    # Reddit rate-limits generic UAs, so use a distinct descriptive one here.
+    resp = await client.get(
+        "https://www.reddit.com/search.json",
+        params={"q": query, "limit": max_results, "sort": "relevance", "raw_json": 1},
+        headers={"User-Agent": "MCP-SearchEngine/0.1 research (by u/unknown)"},
+    )
+    resp.raise_for_status()
+    results: list[SearchResult] = []
+    for i, child in enumerate(resp.json().get("data", {}).get("children", [])):
+        data = child.get("data", {})
+        url = data.get("url") or f"https://www.reddit.com{data.get('permalink', '')}"
+        permalink = f"https://www.reddit.com{data.get('permalink', '')}"
+        results.append(
+            SearchResult(
+                id=f"reddit-{i}",
+                source="reddit",
+                title=_clean(data.get("title"), 140),
+                url=url,
+                snippet=_clean(data.get("selftext")),
+                extra={
+                    "subreddit": data.get("subreddit_name_prefixed", ""),
+                    "score": data.get("score", 0),
+                    "comments": data.get("num_comments", 0),
+                    "permalink": permalink,
+                },
+            )
+        )
+    return results
+
+
+async def _search_x(
+    client: httpx.AsyncClient, query: str, max_results: int
+) -> list[SearchResult]:
+    """X/Twitter via nitter HTML instances (syndication API is per-profile,
+    so keyword search goes through nitter mirrors)."""
+    # Per-request headers override the shared client's headers in httpx: the
+    # client merges its own headers with the per-request ones, giving the
+    # per-request values precedence. So we can switch the UA just for this
+    # source without touching the shared client.
+    browser_ua = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+    )
+    configured = os.environ.get("X_NITTER_INSTANCE")
+    instances = (
+        [configured] + _NITTER_INSTANCES
+        if configured
+        else _NITTER_INSTANCES
+    )[:3]
+
+    last_error: Exception | None = None
+    for instance in instances:
+        try:
+            resp = await client.get(
+                f"{instance}/search",
+                params={"q": query, "f": "tweets"},
+                headers={"User-Agent": browser_ua},
+            )
+            resp.raise_for_status()
+            soup = BeautifulSoup(resp.text, "html.parser")
+            items = soup.select(".timeline .timeline-item .tweet-content .tweet-body")
+            if not items:
+                items = soup.select(".timeline-item")
+            if not items:
+                continue  # tried this instance, it yielded nothing
+            results: list[SearchResult] = []
+            for i, item in enumerate(items[:max_results]):
+                text_el = item.select_one(".tweet-content")
+                text = text_el.get_text(" ", strip=True) if text_el else ""
+                if not text:
+                    continue
+                link_el = item.select_one("a.tweet-link") or item.select_one("a")
+                href = link_el.get("href") if link_el and link_el.get("href") else ""
+                url = href if href.startswith("http") else f"{instance}{href}" if href else f"{instance}/search"
+                author_el = item.select_one(".tweet-avatar") or item.select_one(".username")
+                author = author_el.get_text(" ", strip=True) if author_el else ""
+                results.append(
+                    SearchResult(
+                        id=f"x-{i}",
+                        source="x",
+                        title=_clean(text[:80], 80),
+                        url=url,
+                        snippet=_clean(text),
+                        extra={"author": author, "via": instance},
+                    )
+                )
+            if results:
+                return results
+            last_error = RuntimeError(f"no results from {instance}")
+        except Exception as e:  # noqa: BLE001 — any nitter instance may fail
+            last_error = e
+            continue
+    raise RuntimeError("X search failed on all nitter instances") from last_error
+
+
+async def _search_perplexity(
+    client: httpx.AsyncClient, query: str, max_results: int
+) -> list[SearchResult]:
+    """Perplexity Chat API (requires PERPLEXITY_API_KEY)."""
+    key = os.environ.get("PERPLEXITY_API_KEY")
+    if not key:
+        # search_all surfaces this as an error card, matching the repo contract.
+        raise RuntimeError("PERPLEXITY_API_KEY not set")
+    resp = await client.post(
+        "https://api.perplexity.ai/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "model": "sonar",
+            "messages": [{"role": "user", "content": query}],
+        },
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    choice = (data.get("choices") or [{}])[0]
+    message = choice.get("message", {})
+    content = message.get("content", "")
+    citations = message.get("citations") or data.get("citations") or []
+    url = citations[0] if citations else ""
+    extra: dict[str, Any] = {}
+    if citations:
+        extra["citations"] = citations
+    return [
+        SearchResult(
+            id="perplexity-0",
+            source="perplexity",
+            title=f"Perplexity: {query[:60]}",
+            url=url,
+            snippet=_clean(content, 300),
+            extra=extra,
+        )
+    ]
+
+
 _SEARCHERS = {
     "web": _search_duckduckgo_api,
     "duckduckgo": _search_duckduckgo_html,
     "wikipedia": _search_wikipedia,
     "arxiv": _search_arxiv,
     "hackernews": _search_hackernews,
+    "reddit": _search_reddit,
+    "x": _search_x,
+    "perplexity": _search_perplexity,
 }
 
 
@@ -262,9 +414,12 @@ async def search_all(
     if not sources:
         sources = DEFAULT_SOURCES
 
+    # Route the shared client through the privacy layer so the proxy
+    # (SEARCH_PROXY_URL / HTTPS_PROXY / ALL_PROXY) and the no-persistence
+    # guarantee apply to every search source too, not just delve scrapes.
     timeout = httpx.Timeout(15.0, connect=8.0)
     headers = {"User-Agent": _UA, "Accept": "*/*"}
-    async with httpx.AsyncClient(timeout=timeout, headers=headers, follow_redirects=True) as client:
+    async with ephemeral_client(timeout=timeout, headers=headers) as client:
         tasks = [
             _SEARCHERS[name](client, query, max_per_source) for name in sources
         ]
@@ -289,17 +444,21 @@ async def search_all(
 
 
 async def scrape_page(url: str, max_chars: int = 6000) -> dict[str, Any]:
-    """Fetch a URL and extract readable text content."""
-    timeout = httpx.Timeout(20.0, connect=8.0)
-    async with httpx.AsyncClient(
-        timeout=timeout,
-        headers={"User-Agent": _UA, "Accept": "text/html,application/xhtml+xml"},
-        follow_redirects=True,
-    ) as client:
-        resp = await client.get(url)
-        resp.raise_for_status()
+    """Fetch a URL and extract readable text content.
 
-    soup = BeautifulSoup(resp.text, "html.parser")
+    Egress goes through :func:`.net.fetch_text`, so the proxy (``SEARCH_PROXY_URL``
+    / ``HTTPS_PROXY`` / ``ALL_PROXY``), the ``SEARCH_SANDBOX_URL`` relay and the
+    no-persistence guarantee all apply to ``delve_sources`` scraping too.
+    """
+    # Wikipedia/arXiv 403 on fake/absent browser UAs — always send the repo UA.
+    headers = {
+        "User-Agent": _UA,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+    body = await fetch_text(url, headers=headers, timeout=20.0)
+    resp_url = url  # sandbox relay may rewrite the request; keep the original
+
+    soup = BeautifulSoup(body, "html.parser")
     for tag in soup(["script", "style", "noscript", "nav", "footer", "header", "form"]):
         tag.decompose()
 
@@ -308,7 +467,7 @@ async def scrape_page(url: str, max_chars: int = 6000) -> dict[str, Any]:
     text = re.sub(r"\n{3,}", "\n\n", main.get_text("\n", strip=True))
     truncated = len(text) > max_chars
     return {
-        "url": str(resp.url),
+        "url": resp_url,
         "title": title,
         "content": text[:max_chars],
         "truncated": truncated,

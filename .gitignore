@@ -6,3 +6,4 @@ ui-test-output/
 *.egg-info/
 dist/
 build/
+.serena/

@@ -5,7 +5,7 @@ version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
     "fastmcp==4.0.0b1",
-    "httpx>=0.28",
+    "httpx[socks]>=0.28",
     "beautifulsoup4>=4.12",
 ]
 

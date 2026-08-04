@@ -1,0 +1,11 @@
+# Deterministic pins for Prefect Horizon deployment.
+#
+# Horizon auto-detects this file and installs it with pip. We pin BOTH the
+# fastmcp beta and its slim variant explicitly because the repo's pyproject.toml
+# expresses the slim pin via a [tool.uv] constraint, which pip does NOT read.
+# The beta pin requires a prerelease-aware resolver (pip's --pre / uv), which
+# Horizon's FastMCP-aware builder already is (FastMCP 4 is the current line).
+fastmcp==4.0.0b1
+fastmcp-slim==4.0.0b1
+httpx[socks]>=0.28
+beautifulsoup4>=4.12

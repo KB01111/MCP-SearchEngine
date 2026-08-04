@@ -8,6 +8,7 @@ MCP server (FastMCP 4 beta) that searches multiple sources and renders an intera
 - Run server (stdio): `.\.venv\Scripts\python -m search_engine`
 - Smoke test: `.\.venv\Scripts\python test_client.py` — in-process FastMCP `Client`; hits live external APIs (DuckDuckGo, Wikipedia, arXiv, HN), so failures may be network, not code. Prints `ALL CHECKS PASSED` on success.
 - UI test: `.\.venv\Scripts\python test_ui_harness.py` — Playwright/Chromium harness; writes screenshots to `ui-test-output/` (gitignored). Prints `UI HARNESS PASSED` on success.
+- Horizon entrypoint check: `.\.venv\Scripts\fastmcp inspect search_engine/server.py:mcp` — shows exactly what Prefect Horizon sees (2 tools + 1 resource). Must pass before deploying.
 
 There is no test framework — both root-level `test_*.py` files are standalone scripts with inline asserts, run directly as above.
 
@@ -17,8 +18,9 @@ There is no test framework — both root-level `test_*.py` files are standalone 
 
 ## Architecture (all under `search_engine/`)
 
-- `server.py` — FastMCP app: `search` + `delve_sources` tools, and the `ui://search-engine/picker.html` resource. `picker.html` is read from disk **once at import time**, so restart the server to pick up HTML edits.
-- `sources.py` — 5 source backends queried concurrently (`_SEARCHERS` dict maps names to async fetchers; `DEFAULT_SOURCES` lists them). Contract: a failing source must produce a `SearchResult` with `extra={"error": True}`, never raise — `search_all` relies on this to show error cards in the UI. Keep it when adding sources.
+- `server.py` — FastMCP app: `search` + `delve_sources` tools, and the `ui://search-engine/picker.html` resource. `picker.html` is read from disk **once at import time**, so restart the server to pick up HTML edits. Self-bootstraps the repo root onto `sys.path` and uses a relative→absolute import fallback so Horizon/`fastmcp inspect` can load it standalone.
+- `net.py` — privacy/network layer. `ephemeral_client()` (fresh client + empty cookie jar per request, proxy applied) and `fetch_text()` are the ONLY egress paths. Proxy from `SEARCH_PROXY_URL`→`HTTPS_PROXY`→`ALL_PROXY` (supports `socks5h://`); `SEARCH_SANDBOX_URL` rewrites fetches to a disposable-sandbox relay.
+- `sources.py` — 8 source backends queried concurrently (`_SEARCHERS` dict maps names to async fetchers; `DEFAULT_SOURCES` lists the default 7 — `perplexity` is opt-in, needs `PERPLEXITY_API_KEY`). Contract: a failing fetcher **raises**, and `search_all` converts that into a `SearchResult` with `extra={"error": True}` — so the UI shows an error card instead of sinking the batch. Keep it when adding sources. Both `search_all` and `scrape_page` route through `net.py` (proxy/sandbox apply to search AND delve).
 - `ui/picker.html` — self-contained MCP App (imports `@modelcontextprotocol/ext-apps` from unpkg; the server's `ResourceCSP` whitelists only `https://unpkg.com` — adding other CDN domains requires updating the CSP in `server.py`). Communicates via `app.ontoolresult` and `app.callServerTool("delve_sources")`.
 
 ## Conventions worth preserving

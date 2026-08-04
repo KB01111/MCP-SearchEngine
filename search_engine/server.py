@@ -14,8 +14,17 @@ Flow
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Any, Annotated
+
+# Prefect Horizon / ``fastmcp inspect`` load this file as a standalone top-level
+# module (no package context, and the repo root is not necessarily on sys.path),
+# which breaks the package-relative imports below. Ensure the repo root (this
+# file's parent.parent) is importable so the absolute fallback works everywhere.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 from fastmcp import FastMCP, Context
 from fastmcp.apps import AppConfig, ResourceCSP, UI_EXTENSION_ID
@@ -23,7 +32,14 @@ from fastmcp.tools import ToolResult
 from mcp.types import TextContent
 from pydantic import Field
 
-from .sources import DEFAULT_SOURCES, search_all, scrape_page
+try:
+    # Normal package import (``python -m search_engine`` / ``import search_engine``).
+    from .sources import DEFAULT_SOURCES, search_all, scrape_page
+except ImportError:  # pragma: no cover - exercised only when loaded standalone
+    # Prefect Horizon / ``fastmcp inspect`` import this file as a top-level
+    # module (no package context), so fall back to an absolute import. The repo
+    # root is on sys.path in that mode, so ``search_engine`` resolves.
+    from search_engine.sources import DEFAULT_SOURCES, search_all, scrape_page
 
 mcp = FastMCP("MCP SearchEngine")
 
@@ -59,8 +75,9 @@ async def search(
         list[str] | None,
         Field(
             description=(
-                f"Subset of sources to query. Any of {DEFAULT_SOURCES}. "
-                "Defaults to all."
+                f"Subset of sources to query. Any of {DEFAULT_SOURCES}; "
+                "`perplexity` is also available but requires PERPLEXITY_API_KEY "
+                "and is NOT in the defaults. Leave unset to query all defaults."
             )
         ),
     ] = None,
@@ -69,8 +86,10 @@ async def search(
     ] = 4,
     ctx: Context | None = None,
 ) -> ToolResult:
-    """Search multiple sources (web, DuckDuckGo, Wikipedia, arXiv, Hacker News)
-    and present the results in an interactive picker UI.
+    """Search multiple sources (web, DuckDuckGo, Wikipedia, arXiv, Hacker News,
+    Reddit, X/Twitter), plus an opt-in Perplexity source requiring
+    PERPLEXITY_API_KEY (not in the defaults), and present the results in an
+    interactive picker UI.
 
     The user can then pick which sources to delve into (full scrape) via the UI,
     or the model can call ``delve_sources`` directly with chosen URLs.
