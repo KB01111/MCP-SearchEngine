@@ -6,6 +6,6 @@
 # The beta pin requires a prerelease-aware resolver (pip's --pre / uv), which
 # Horizon's FastMCP-aware builder already is (FastMCP 4 is the current line).
 fastmcp==4.0.0b1
-fastmcp-slim==4.0.0b1
+fastmcp-slim==4.1.2
 httpx[socks]>=0.28
 beautifulsoup4>=4.12
